@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Grid World</title>
+	<!-- // <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.5/jquery.min.js"></script> -->
+	<script src="jquery.min.js"></script>
+	<script type="text/javascript">
+		$(document).ready(function(){
+			table.setup();			
+		})
+		
+		var states = {
+			regular: {
+				reward: 0
+			},
+			wall: {
+				reward: 0
+			},
+			diamond: {
+				reward: 10
+			},
+			swamp: {
+				reward: -10
+			}
+		};
+		
+		var actions = {
+			up: {
+				i: 0,
+				j: -1
+			},
+			down: {
+				i: 0,
+				j: 1
+			},
+			left: {
+				i: -1,
+				j: 0
+			},
+			right: {
+				i: 1,
+				j: 0
+			}
+		}
+		
+		var table = {
+			m: null,
+			n: null,
+			setup: function(){
+				table.m = parseInt($('input[name=size-row]').val());
+				table.n = parseInt($('input[name=size-col]').val());
+				console.log('Setup table or size '+table.m+' by '+table.n+'...');				
+				var table_tag = $('<table id="grid"></table>').appendTo('#table-wrapper');
+				var count = 0;
+				for (var i = 0; i < (table.m+2); i++){
+					var row = $('<tr></tr>').attr('row', i).appendTo(table_tag);
+					if ((i==0) || (i==(table.m+1))){
+						$(row).addClass('wall');
+					}
+					for (var j = 0; j < (table.n+2); j++){						
+						var cell = $('<td></td>').attr('col', j).attr('id', 'cell-'+count).attr('state','regular').hide().appendTo(row).fadeIn();
+						if ((j==0) || (j==(table.n+1)) || (i==0) || (i==(table.m+1))){
+							$(cell).addClass('wall').attr('state', 'wall');
+						}else{
+							$(cell).addClass('changeable').addClass('grid-cell');
+							$('<div class="action-value action-value-up"></div>').appendTo(cell);
+							$('<div class="action-value action-value-left"></div>').appendTo(cell);
+							$('<div class="action-value action-value-right"></div>').appendTo(cell);
+							$('<div class="action-value action-value-down"></div>').appendTo(cell);
+						}
+						count++;
+					}
+				}
+				
+				table.setUI();
+			},
+			reset: function(){				
+				console.log('reset table...');
+				$('#table-wrapper').empty();
+				table.setup();
+			},
+			setUI: function(){
+				console.log('- Setup UI...');
+				
+				$('.changeable').click(function(e){
+					var s = $(this).attr('state');
+					var ss = Object.keys(states);
+					$(this).attr('state', ss[(ss.indexOf(s)+1)%ss.length]);
+				})
+				
+				$('#state-rewards').empty();
+				for (var state in states){					
+					var row = $('<tr></tr>').appendTo('#state-rewards');
+					$('<td class="caption"></td>').attr('state', state).html(state).appendTo(row);
+					$('<td class="input"></td>').html('<input type="text" name="'+state+'" size="4" value="'+states[state].reward+'">').appendTo(row);
+				}
+				
+				$('#main-control').empty();
+				var reset = $('<a href="#" id="reset"></a>').html('reset').hide().appendTo('#main-control').click(function(e){
+					e.preventDefault();
+					table.reset();
+				})
+				
+				$('<a href="#" id="start"></a>').html('start').appendTo('#main-control').click(function(e){
+					e.preventDefault();
+					ValueIteration.begin();
+					$('.changeable').unbind('click').removeClass('changeable');
+					$(this).hide();
+					reset.fadeIn();
+				})
+			}
+		};
+		
+		var ValueIteration = {
+			discount: 0.5,
+			pi: {},
+			Q: {},
+			Q_new: {},
+			V: {},
+			V_new: {},
+			begin: function(){
+				$.each($('.grid-cell'), function(i,v){
+					var pi_0 = {};
+					var q_0 = {};
+					for (var action in actions){
+						pi_0[action] = 1.0/(Object.keys(actions).length);
+						q_0[action] = 0.0;
+					}
+					
+					var s_id = $(v).attr('id');
+					
+					console.log(i+": "+$(v).attr('id')+', state='+$(v).attr('state'));
+					// init policy
+					ValueIteration.pi[s_id] = pi_0;
+					ValueIteration.V[s_id] = 0.0;
+					ValueIteration.Q[s_id] = q_0;
+					
+					$(v).html(ValueIteration.V[s_id]);
+					v.updatePi(pi_0);
+				})
+				
+				$('<a href="#" id="iterate" class="table-control"></a>').html('Iterate').appendTo('#table-wrapper').click(function(e){
+					ValueIteration.iterate();
+				});
+			},
+			iterate: function(){
+				var delta = ValueIteration.evaluate();
+				console.log('delta: '+delta);
+				while (delta > 0.1){
+					console.log('delta: '+delta);
+					delta = ValueIteration.evaluate();
+				}
+				ValueIteration.improve();
+			},
+			evaluate: function(){
+				var delta = 0;
+				$.each($('.grid-cell'), function(i,v){
+					var s_id = $(v).attr('id');					
+					var v_current = ValueIteration.V[s_id];
+					var v_new = 0;
+					for (var action in actions){
+						var s_next_id = 'cell-'+(parseInt(s_id.split('-')[1])+(table.n+2)*(actions[action].j)+actions[action].i)+'';
+						var s_next = $('#'+s_next_id);						
+						if (s_next.attr('state')=='wall'){
+							s_next = v; //stay in the current state if bumped into the wall
+							s_next_id = s_id;							
+						}
+						// console.log('action:'+action+' state: '+s_next_id);
+						v_new += ValueIteration.pi[s_next_id][action] * (states[$(s_next).attr('state')].reward+ValueIteration.V[s_next_id]*ValueIteration.discount);
+						// console.log("v_new += "+ValueIteration.pi[s_next_id][action]+"*"+ ValueIteration.V[s_next_id]);
+					}
+					var v_diff = Math.abs(v_new - v_current);
+					if (v_diff > delta){
+						delta = v_diff;
+					}
+					ValueIteration.V_new[s_id] = v_new;
+					console.log('Updating value at cell id: '+s_id+' with v_new='+v_new);
+					$(v).html(ValueIteration.V_new[s_id].toFixed(1));
+				});
+				ValueIteration.V = ValueIteration.V_new;
+				ValueIteration.V_new = {};
+				return delta;
+			},
+			improve: function(){
+				console.log('Policy improvement');
+				$.each($('.grid-cell'), function(i,v){
+					var action_opt = [];
+					var v_max = 0.0;
+					var s_id = $(v).attr('id');
+					for (var action in actions){
+						var s_next_id = 'cell-'+(parseInt(s_id.split('-')[1])+(table.n+2)*(actions[action].j)+actions[action].i)+'';
+						var s_next = $('#'+s_next_id);
+						var v_next = parseInt(ValueIteration.V[s_next_id]);
+						if (v_next > v_max){
+							v_max = v_next;
+							action_opt = [action];
+						}else if (v_next == v_max){
+							action_opt[action_opt.length] = action;
+						}						
+					}
+					var N = action_opt.length;
+					if (N>0){
+						for (action in actions){
+							if (action_opt.indexOf(action)>=0){
+								ValueIteration.pi[s_id][action] = 1.0/N;
+							}else{
+								ValueIteration.pi[s_id][action] = 0.0;
+							}
+						}
+						console.log('policy improved:'+s_id);
+					}
+					v.updatePi(ValueIteration.pi[s_id]);
+				})
+			}
+		}
+		
+		jQuery.fn.updatePi = function(pi_s){
+			this.find('.action-value-up').html(pi_s.up);
+			this.find('.action-value-left').html(pi_s.left);
+			this.find('.action-value-right').html(pi_s.right);
+			this.find('.action-value-down').html(pi_s.down);
+		};
+	</script>
+	<style>
+		body{
+			background: #000;
+			color: #ccc;
+			font-family: helvetica;
+		}
+		
+		#wrapper{
+			position: relative;
+			width: 100%;
+			height: 100%;
+		}
+		
+		#table-wrapper{
+			display: inline-block;
+			vertical-align: top;
+/*			width: 1050px;*/
+			margin-top: 150px;
+			margin-left: 250px;
+			padding: 0px;		
+		}
+		
+		.cell{
+			height: 70px;
+			width: 80px;
+			background: #eee;
+			margin: 2px 0px;
+			padding: 5px 0px;
+			text-align: center;
+			display: inline-block;
+			vertical-align: top;
+			color: #000;
+			font-size: 75px;						
+			line-height: 75px;
+		}
+		
+		#control{
+			position: fixed;
+			top: 0px;
+			left: 0px;
+			background: #111;
+			border-right: 2px #222 solid;
+			width: 200px;
+			min-height: 100%;
+			font-size: 90%;
+
+		}
+		
+		.con-sec{
+			margin: 5px;
+			width: 190px;
+			background: #111;
+		}
+		
+		.con-sec-title{
+			padding: 5px;
+			background: #444;
+			color: #fff;
+			font-size: 70%;
+		}
+		
+		.con-sec-content{
+			font-size: 80%;
+			padding: 5px;
+		}
+		
+		.con-sec a{
+			padding: 3px 5px;
+			text-align: center;
+			margin: 5px auto;
+			width: 100px;
+			display: inline-block;
+			color: #fff;
+			font-size: 120%;
+			text-decoration: none;
+			background: #0a0;
+			border-radius: 3px;
+		}
+		
+		.con-sec a:hover{
+			background: #0f0;
+		}
+		
+		.unselected{
+			cursor: pointer;
+			cursor: hand;
+		}
+		
+		.unselected:hover{
+			background: #888;			
+		}
+		
+		.table-control{
+			padding: 3px 5px;
+			text-align: center;
+			margin: 5px auto;
+			display: inline-block;
+			color: #fff;
+			font-size: 80%;
+			text-decoration: none;
+			background: #0a0;
+			border-radius: 3px;
+		}
+		
+		.grid-cell{
+			height: 50px;
+			width: 50px;
+			background: #eee;
+			text-align: center;
+		}
+		
+		.changeable{
+			cursor: pointer;
+			cursor: hand;			
+		}
+		
+		.changeable:hover{
+			opacity: 0.7;
+		}
+		
+		tr.wall>td{
+			height: 3px;
+			
+		}
+		
+		td.wall{
+			width: 3px;			
+		}
+		
+		.caption{
+			color: #fff;
+		}
+		
+		td[state=regular]{
+			color: #000;
+			background: #fff;
+		}
+		
+		td[state=wall]{
+			color: #000;
+			background: #fc0;
+		}
+		
+		td[state=diamond]{
+			background: #0af;
+		}
+		
+		td[state=swamp]{
+			background: #f00;
+		}
+		
+	</style>
+</head>
+<body>	
+	<div id="wrapper">
+		<div id="control">
+			<div class="con-sec">
+				<div class="con-sec-title">
+					Set grid size (rows-by-cols)
+				</div>
+				<div class="con-sec-content">
+					<input type="text" name="size-row" size="4" placeholder="rows" value="3"> by
+					<input type="text" name="size-col" size="4" placeholder="columns" value="5">
+				</div>
+			</div>
+
+			<div class="con-sec">
+				<div class="con-sec-title">
+					Set state rewards
+				</div>
+				<div class="con-sec-content">
+					<table id="state-rewards">
+					</table>
+				</div>
+			</div>
+			
+			<div class="con-sec">
+				<div id="main-control" class="con-sec-content">
+					<a href="#" id="reset"> RESET</a>
+					<a href="#" id="start"> Start</a>
+				</div>
+			</div>
+		</div>
+		<div id="table-wrapper">
+
+		</div>
+	</div>	
+</body>
+</html>
